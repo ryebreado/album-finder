@@ -53,8 +53,7 @@ def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', 
         limit: Maximum number of albums to fetch
     
     Returns:
-        List of albums with artist, title, and playcount.
-        Note: Release dates are not available via Last.fm API.
+        List of albums with artist, title, and scrobbles.
     """
     # Check cache first
     cache_file = get_cache_filename(username, period, limit)
@@ -120,21 +119,20 @@ def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', 
                 album = {
                     'artist': str(artist_name).strip(),
                     'title': str(album_data.get('name', '')).strip(),
-                    'playcount': str(album_data.get('playcount', '0')),
-                    'release_date': ''  # Not available via Last.fm API
+                    'scrobbles': str(album_data.get('playcount', '0'))
                 }
                 
                 # Debug: print first album data on first page
                 if page == 1 and i == 0:
                     print(f"Sample album data: {album_data}")
                     print(f"Parsed album: {album}")
-                    print(f"Playcount check: {album['playcount']} > 0 = {int(album['playcount']) > 0}")
+                    print(f"Scrobbles check: {album['scrobbles']} > 0 = {int(album['scrobbles']) > 0}")
                 
                 # Only add if we have essential data
-                if album['artist'] and album['title'] and int(album['playcount']) > 0:
+                if album['artist'] and album['title'] and int(album['scrobbles']) > 0:
                     albums.append(album)
                 elif page == 1 and i < 3:  # Debug first few albums on first page
-                    print(f"Filtered out album {i}: artist='{album['artist']}', title='{album['title']}', playcount={album['playcount']}")
+                    print(f"Filtered out album {i}: artist='{album['artist']}', title='{album['title']}', scrobbles={album['scrobbles']}")
                 
                 if len(albums) >= limit:
                     break
@@ -205,7 +203,7 @@ def main():
     for album in albums:
         print(f"Artist: {album['artist']}")
         print(f"Title: {album['title']}")
-        print(f"Playcount: {album['playcount']}")
+        print(f"Scrobbles: {album['scrobbles']}")
         print("-" * 50)
 
 if __name__ == "__main__":
