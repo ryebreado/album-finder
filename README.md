@@ -13,12 +13,12 @@ export LASTFM_API_KEY=your_api_key_here
 ### Extract RYM Data
 Extract rated albums from your RYM CSV export:
 ```bash
-python rym_extractor.py [your_rym_export].csv
+python rym_extractor.py data/your-music-export.csv
 ```
 
-The RYM CSV can be found by going to your RYM profile and scrolling all the way to the bottom and clicking "Export your music catalog." It should be named `[username]-music-export.csv`
+The RYM CSV can be found by going to your RYM profile and scrolling all the way to the bottom and clicking "Export your music catalog," named `[username]-music-export.csv`. Save it in the `data/` directory.
 
-Only albums with rating > 0 are included. 
+Only albums with rating > 0 are included. Both regular and localized artist names are extracted for better matching. 
 
 ### Extract Last.fm Data
 Extract your top albums from Last.fm:
@@ -33,3 +33,5 @@ Examples:
 
 **Periods:** overall (default), 7day, 1month, 3month, 6month, 12month
 **Limit:** Maximum number of albums (default: 1000)
+
+**Caching:** Data is automatically cached in `data/` directory to avoid repeated API calls.

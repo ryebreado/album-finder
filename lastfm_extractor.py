@@ -3,7 +3,44 @@ import requests
 import sys
 import json
 import os
+from datetime import datetime
 from typing import List, Dict, Optional
+
+def get_cache_filename(username: str, period: str, limit: int) -> str:
+    """Generate cache filename based on parameters."""
+    return f"data/lastfm_{username}_{period}_{limit}.json"
+
+def load_cached_data(cache_file: str) -> Optional[List[Dict[str, str]]]:
+    """Load cached data if it exists."""
+    if not os.path.exists(cache_file):
+        return None
+    
+    try:
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            cached = json.load(f)
+        
+        cached_time = datetime.fromisoformat(cached['timestamp'])
+        print(f"Using cached data from {cached_time.strftime('%Y-%m-%d %H:%M')}")
+        return cached['albums']
+            
+    except (json.JSONDecodeError, KeyError, ValueError):
+        print("Cache file corrupted, fetching fresh data...")
+        return None
+
+def save_to_cache(albums: List[Dict[str, str]], cache_file: str):
+    """Save albums data to cache with timestamp."""
+    # Ensure data directory exists
+    os.makedirs('data', exist_ok=True)
+    
+    cache_data = {
+        'timestamp': datetime.now().isoformat(),
+        'albums': albums
+    }
+    
+    with open(cache_file, 'w', encoding='utf-8') as f:
+        json.dump(cache_data, f, indent=2, ensure_ascii=False)
+    
+    print(f"Saved {len(albums)} albums to cache: {cache_file}")
 
 def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', limit: int = 1000) -> List[Dict[str, str]]:
     """
@@ -19,6 +56,12 @@ def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', 
         List of albums with artist, title, and playcount.
         Note: Release dates are not available via Last.fm API.
     """
+    # Check cache first
+    cache_file = get_cache_filename(username, period, limit)
+    cached_albums = load_cached_data(cache_file)
+    if cached_albums is not None:
+        return cached_albums
+    
     albums = []
     page = 1
     per_page = 200  # Max allowed per page
@@ -98,7 +141,10 @@ def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', 
             
             page += 1
             
-        return albums[:limit]
+        # Save to cache before returning
+        final_albums = albums[:limit]
+        save_to_cache(final_albums, cache_file)
+        return final_albums
         
     except requests.RequestException as e:
         print(f"Error making API request: {e}")
