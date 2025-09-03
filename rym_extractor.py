@@ -13,15 +13,25 @@ def extract_rym_data(csv_file_path: str) -> List[Dict[str, str]]:
     try:
         df = pd.read_csv(csv_file_path)
         
+        # Debug: print column names
+        print(f"CSV columns: {list(df.columns)}")
+        
         # Filter out unrated albums (rating 0 or NaN)
         df = df[df['Rating'] > 0]
         
-        # Use only Last Name for artist (ignore "The" prefix in First Name)
-        df['artist'] = df['Last Name'].fillna('').str.strip()
+        # Combine First Name and Last Name for artist
+        df['first_name'] = df[' First Name'].fillna('').str.strip()
+        df['last_name'] = df['Last Name'].fillna('').str.strip()
+        df['artist'] = (df['first_name'] + ' ' + df['last_name']).str.strip()
         
-        # Select and rename columns
-        result_df = df[['Title', 'artist', 'Release_Date', 'Rating']].copy()
-        result_df.columns = ['title', 'artist', 'release_date', 'rating']
+        # Create localized artist name variant
+        df['first_name_loc'] = df['First Name localized'].fillna('').str.strip()
+        df['last_name_loc'] = df[' Last Name localized'].fillna('').str.strip()
+        df['artist_localized'] = (df['first_name_loc'] + ' ' + df['last_name_loc']).str.strip()
+        
+        # Select and rename columns, including both name variants
+        result_df = df[['Title', 'artist', 'artist_localized', 'Release_Date', 'Rating']].copy()
+        result_df.columns = ['title', 'artist', 'artist_localized', 'release_date', 'rating']
         
         # Filter out rows with missing essential data
         result_df = result_df.dropna(subset=['title', 'artist'])
@@ -58,6 +68,8 @@ def main():
     for album in albums:
         print(f"Title: {album['title']}")
         print(f"Artist: {album['artist']}")
+        if album.get('artist_localized') and album['artist_localized'].strip():
+            print(f"Artist (localized): {album['artist_localized']}")
         print(f"Release Date: {album['release_date']}")
         print(f"Rating: {album['rating']}")
         print("-" * 50)

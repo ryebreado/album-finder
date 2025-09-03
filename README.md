@@ -8,20 +8,17 @@ Set your Last.fm API key as an environment variable:
 ```bash
 export LASTFM_API_KEY=your_api_key_here
 ```
-
-To make it permanent, add this line to your `~/.bashrc` or `~/.zshrc` file.
-
 ## Usage
 
 ### Extract RYM Data
 Extract rated albums from your RYM CSV export:
 ```bash
-python rym_extractor.py your_rym_export.csv
+python rym_extractor.py [your_rym_export].csv
 ```
 
-The RYM CSV should have columns: RYM Album, First Name, Last Name, First Name localized, Last Name localized, Title, Release_Date, Rating, Ownership, Purchase Date, Media Type, Review
+The RYM CSV can be found by going to your RYM profile and scrolling all the way to the bottom and clicking "Export your music catalog." It should be named `[username]-music-export.csv`
 
-Only albums with rating > 0 are included. Artist name is taken from "Last Name" field (ignores "The" prefixes from "First Name").
+Only albums with rating > 0 are included. 
 
 ### Extract Last.fm Data
 Extract your top albums from Last.fm:
@@ -36,5 +33,3 @@ Examples:
 
 **Periods:** overall (default), 7day, 1month, 3month, 6month, 12month
 **Limit:** Maximum number of albums (default: 1000)
-
-**Note:** Release dates are not available via Last.fm API - only artist, title, and playcount are extracted.
