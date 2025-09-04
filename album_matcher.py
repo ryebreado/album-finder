@@ -2,6 +2,7 @@
 import sys
 import os
 import json
+import html
 from typing import List, Dict, Tuple, Set
 from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
@@ -14,8 +15,36 @@ def normalize_string(s: str) -> str:
     """Normalize string for better matching."""
     if not s:
         return ""
+    # Decode HTML entities (&amp; -> &, etc.)
+    s = html.unescape(s)
     # Convert to lowercase, strip whitespace
     return s.lower().strip()
+
+def normalize_title(title: str) -> str:
+    """Normalize album title by removing common edition parentheticals."""
+    if not title:
+        return ""
+    
+    # Decode HTML entities first
+    title = html.unescape(title)
+    
+    # Remove only common edition/version parentheticals
+    import re
+    
+    # Separate patterns for readability
+    patterns = [
+        r'\s*\(.*?edition\)\s*',                    # Any "...edition" 
+        r'\s*\((remaster(?:ed)?|\d{4}\s*remaster(?:ed)?)\)\s*',  # Remasters
+        r'\s*\(deluxe\)\s*',                       # Deluxe (standalone)
+        r'\s*\(expanded\)\s*',                     # Expanded (standalone)
+        r'\s*\(demos.*?\)\s*',                     # Demos (with optional years/info)
+        r'\s*\(explicit\)\s*',                     # Explicit
+    ]
+    
+    for pattern in patterns:
+        title = re.sub(pattern, '', title, flags=re.IGNORECASE)
+    
+    return title.strip().lower()
 
 def extract_main_artist(artist_string: str) -> str:
     """Extract main artist from collaboration strings."""
@@ -71,16 +100,17 @@ def load_blacklist(blacklist_path: str = "data/blacklist.json") -> List[Dict]:
 def is_blacklisted(album: Dict, blacklist: List[Dict]) -> bool:
     """Check if an album matches any blacklist entry."""
     album_artist = normalize_string(album['artist'])
-    album_title = normalize_string(album['title'])
+    album_title = normalize_title(album['title'])
     
     for blocked in blacklist:
         blocked_artist = normalize_string(blocked.get('artist', ''))
-        blocked_title = normalize_string(blocked.get('title', ''))
+        blocked_title = normalize_title(blocked.get('title', ''))
         
         if album_artist == blocked_artist and album_title == blocked_title:
             return True
     
     return False
+
 
 def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict], 
                       artist_threshold: int = 85, title_threshold: int = 85) -> Tuple[List[Dict], List[Dict]]:
@@ -103,7 +133,7 @@ def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict],
     
     for lastfm_album in lastfm_albums:
         lastfm_artist = normalize_string(lastfm_album['artist'])
-        lastfm_title = normalize_string(lastfm_album['title'])
+        lastfm_title = normalize_title(lastfm_album['title'])
         
         if not lastfm_artist or not lastfm_title:
             continue
@@ -115,7 +145,7 @@ def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict],
         for rym_album in rym_albums:
             rym_artist = normalize_string(rym_album['artist'])
             rym_artist_loc = normalize_string(rym_album.get('artist_localized', ''))
-            rym_title = normalize_string(rym_album['title'])
+            rym_title = normalize_title(rym_album['title'])
             
             if not rym_artist or not rym_title:
                 continue
@@ -146,8 +176,16 @@ def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict],
                     'combined_score': combined_score
                 }
                 
+                # Tiered thresholds: if artist match is perfect, be more lenient on title
+                if best_artist_score >= 95:  # Near-perfect artist match
+                    title_min = 60
+                elif best_artist_score >= artist_threshold:  # Good artist match
+                    title_min = title_threshold
+                else:
+                    title_min = 100  # Impossible - require perfect artist match
+                
                 if (best_artist_score >= artist_threshold and 
-                    title_score >= title_threshold):
+                    title_score >= title_min):
                     best_match = rym_album
         
         if best_match:
@@ -171,15 +209,22 @@ def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict],
     return matched_albums, unrated_albums
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python album_matcher.py <rym_csv_path> <lastfm_username> [period] [limit]")
-        print("Example: python album_matcher.py data/nepeta-music-export.csv nitrification 1month 100")
-        sys.exit(1)
+    import argparse
     
-    rym_csv_path = sys.argv[1]
-    lastfm_username = sys.argv[2]
-    period = sys.argv[3] if len(sys.argv) > 3 else 'overall'
-    limit = int(sys.argv[4]) if len(sys.argv) > 4 else 1000
+    parser = argparse.ArgumentParser(description='Find Last.fm albums not rated on RYM')
+    parser.add_argument('rym_csv', help='Path to RYM CSV export')
+    parser.add_argument('lastfm_username', help='Last.fm username')
+    parser.add_argument('period', nargs='?', default='overall', 
+                       help='Time period (overall, 7day, 1month, 3month, 6month, 12month)')
+    parser.add_argument('limit', nargs='?', type=int, default=1000,
+                       help='Maximum number of albums to fetch')
+    
+    args = parser.parse_args()
+    
+    rym_csv_path = args.rym_csv
+    lastfm_username = args.lastfm_username
+    period = args.period
+    limit = args.limit
     
     # Check if API key is set
     api_key = os.getenv('LASTFM_API_KEY')
@@ -240,7 +285,7 @@ def main():
                                reverse=True)
         
         for album in unrated_sorted[:20]:  # Show top 20
-            print(f"🎧 {album['scrobbles']} scrobbles")
+            print(f"{album['scrobbles']} scrobbles")
             print(f"   {album['artist']} - {album['title']}")
             
             # Show best match attempt for debugging
@@ -252,20 +297,20 @@ def main():
                 print(f"   No potential matches found")
             print()
     
-    if matched_albums:
-        print(f"\nSAMPLE MATCHED ALBUMS ({min(10, len(matched_albums))}):")
-        print("-" * 60)
+    # if matched_albums:
+    #     print(f"\nSAMPLE MATCHED ALBUMS ({min(10, len(matched_albums))}):")
+    #     print("-" * 60)
         
-        # Sort by match score (descending)
-        matched_sorted = sorted(matched_albums, 
-                               key=lambda x: x.get('match_score', 0), 
-                               reverse=True)
+    #     # Sort by match score (descending)
+    #     matched_sorted = sorted(matched_albums, 
+    #                            key=lambda x: x.get('match_score', 0), 
+    #                            reverse=True)
         
-        for album in matched_sorted[:10]:
-            print(f"⭐ {album.get('rym_rating', 'N/A')}/10 | 🎧 {album['scrobbles']} scrobbles | Match: {album.get('match_score', 0):.1f}")
-            print(f"   Last.fm: {album['artist']} - {album['title']}")
-            print(f"   RYM: {album.get('rym_artist', '')} - {album.get('rym_title', '')}")
-            print()
+    #     for album in matched_sorted[:10]:
+    #         print(f"{album.get('rym_rating', 'N/A')}/10 | {album['scrobbles']} scrobbles | Match: {album.get('match_score', 0):.1f}")
+    #         print(f"   Last.fm: {album['artist']} - {album['title']}")
+    #         print(f"   RYM: {album.get('rym_artist', '')} - {album.get('rym_title', '')}")
+    #         print()
 
 if __name__ == "__main__":
     main()

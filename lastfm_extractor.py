@@ -42,6 +42,7 @@ def save_to_cache(albums: List[Dict[str, str]], cache_file: str):
     
     print(f"Saved {len(albums)} albums to cache: {cache_file}")
 
+
 def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', limit: int = 1000) -> List[Dict[str, str]]:
     """
     Extract album data from Last.fm user's top albums.
