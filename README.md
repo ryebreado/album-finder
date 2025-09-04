@@ -28,7 +28,7 @@ python album_matcher.py data/nepeta-music-export.csv nitrification 1month 100
 ```
 
 **Features:**
-- **Smart fuzzy matching** handles artist collaborations and localized names
+- **Smart fuzzy matching** handles artist collaborations, localized names, parentheticals after album title like "(Explicit)"
 - **Prioritization** shows most-listened unrated albums first
 - **Blacklist** for excluding stuff from the "to rate" for any reason
 
