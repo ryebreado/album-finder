@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import os
+import json
 from typing import List, Dict, Tuple, Set
 from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
@@ -52,6 +53,34 @@ def calculate_artist_match_score(lastfm_artist: str, rym_artist: str) -> float:
     
     # Return the best score
     return max(direct_score, main_score, containment_score)
+
+def load_blacklist(blacklist_path: str = "data/blacklist.json") -> List[Dict]:
+    """Load blacklist of albums to exclude from recommendations."""
+    if not os.path.exists(blacklist_path):
+        return []
+    
+    try:
+        with open(blacklist_path, 'r', encoding='utf-8') as f:
+            blacklist = json.load(f)
+        print(f"Loaded {len(blacklist)} blacklisted albums")
+        return blacklist
+    except (json.JSONDecodeError, FileNotFoundError):
+        print(f"Could not load blacklist from {blacklist_path}")
+        return []
+
+def is_blacklisted(album: Dict, blacklist: List[Dict]) -> bool:
+    """Check if an album matches any blacklist entry."""
+    album_artist = normalize_string(album['artist'])
+    album_title = normalize_string(album['title'])
+    
+    for blocked in blacklist:
+        blocked_artist = normalize_string(blocked.get('artist', ''))
+        blocked_title = normalize_string(blocked.get('title', ''))
+        
+        if album_artist == blocked_artist and album_title == blocked_title:
+            return True
+    
+    return False
 
 def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict], 
                       artist_threshold: int = 85, title_threshold: int = 85) -> Tuple[List[Dict], List[Dict]]:
@@ -162,22 +191,34 @@ def main():
     print("ALBUM MATCHER - Find Last.fm albums not rated on RYM")
     print("=" * 60)
     
+    # Load blacklist
+    print(f"\n1. Loading blacklist...")
+    blacklist = load_blacklist()
+    
     # Extract RYM data
-    print(f"\n1. Loading RYM data from {rym_csv_path}...")
+    print(f"\n2. Loading RYM data from {rym_csv_path}...")
     rym_albums = extract_rym_data(rym_csv_path)
     print(f"Found {len(rym_albums)} rated albums on RYM")
     
     # Extract Last.fm data
-    print(f"\n2. Loading Last.fm data for {lastfm_username} ({period}, limit: {limit})...")
+    print(f"\n3. Loading Last.fm data for {lastfm_username} ({period}, limit: {limit})...")
     lastfm_albums = extract_lastfm_albums(lastfm_username, api_key, period, limit)
     print(f"Found {len(lastfm_albums)} albums on Last.fm")
+    
+    # Filter out blacklisted albums
+    if blacklist:
+        original_count = len(lastfm_albums)
+        lastfm_albums = [album for album in lastfm_albums if not is_blacklisted(album, blacklist)]
+        filtered_count = original_count - len(lastfm_albums)
+        if filtered_count > 0:
+            print(f"Filtered out {filtered_count} blacklisted albums")
     
     if not rym_albums or not lastfm_albums:
         print("Error: No data to compare")
         sys.exit(1)
     
     # Perform fuzzy matching
-    print(f"\n3. Performing fuzzy matching...")
+    print(f"\n4. Performing fuzzy matching...")
     matched_albums, unrated_albums = fuzzy_match_albums(rym_albums, lastfm_albums)
     
     # Display results
