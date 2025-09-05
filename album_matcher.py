@@ -11,6 +11,12 @@ from fuzzywuzzy import process
 from rym_extractor import extract_rym_data
 from lastfm_extractor import extract_lastfm_albums
 
+try:
+    from musicbrainz_client import MusicBrainzClient
+    MUSICBRAINZ_AVAILABLE = True
+except ImportError:
+    MUSICBRAINZ_AVAILABLE = False
+
 def normalize_string(s: str) -> str:
     """Normalize string for better matching."""
     if not s:
@@ -111,9 +117,107 @@ def is_blacklisted(album: Dict, blacklist: List[Dict]) -> bool:
     
     return False
 
+def should_filter_by_release_type(album: Dict, filter_config: Dict) -> bool:
+    """Check if an album should be filtered out based on release type."""
+    primary_type = album.get('mb_primary_type')
+    secondary_types = album.get('mb_secondary_types', [])
+    confidence = album.get('mb_confidence', 0.0)
+    
+    # If no MusicBrainz data or low confidence, don't filter
+    if not primary_type or confidence < 0.7:
+        return False
+    
+    # Filter singles if requested
+    if filter_config.get('filter_singles', True) and primary_type and primary_type.lower() == 'single':
+        return True
+    
+    # Filter EPs if requested
+    if filter_config.get('filter_eps', False) and primary_type and primary_type.lower() == 'ep':
+        return True
+    
+    # Filter compilations if requested (check secondary types case-insensitively)
+    if filter_config.get('filter_compilations', True) and secondary_types:
+        if any('compilation' in sec_type.lower() for sec_type in secondary_types):
+            return True
+    
+    # Filter live albums if requested
+    if filter_config.get('filter_live', False) and secondary_types:
+        if any('live' in sec_type.lower() for sec_type in secondary_types):
+            return True
+    
+    # Filter demos if requested
+    if filter_config.get('filter_demos', True) and secondary_types:
+        if any('demo' in sec_type.lower() for sec_type in secondary_types):
+            return True
+    
+    # Filter mixtapes if requested
+    if filter_config.get('filter_mixtapes', True) and secondary_types:
+        if any('mixtape' in sec_type.lower() or 'street' in sec_type.lower() for sec_type in secondary_types):
+            return True
+    
+    return False
+
+def filter_albums_by_type(albums: List[Dict], filter_config: Dict, debug: bool = False) -> List[Dict]:
+    """Filter albums based on release type preferences."""
+    if not filter_config:
+        return albums
+    
+    filtered = []
+    filtered_count = 0
+    
+    # Open debug file for filtering if debug mode enabled
+    debug_file = None
+    if debug:
+        os.makedirs('data', exist_ok=True)
+        debug_file = open('data/debug_filtering.txt', 'w', encoding='utf-8')
+        debug_file.write("MUSICBRAINZ FILTERING DEBUG OUTPUT\n")
+        debug_file.write("=" * 60 + "\n\n")
+    
+    for album in albums:
+        should_filter = should_filter_by_release_type(album, filter_config)
+        
+        if debug and debug_file:
+            debug_file.write(f"ALBUM: {album['artist']} - {album['title']}\n")
+            debug_file.write(f"Primary Type: {album.get('mb_primary_type', 'None')}\n")
+            debug_file.write(f"Secondary Types: {album.get('mb_secondary_types', [])}\n")
+            debug_file.write(f"MB Confidence: {album.get('mb_confidence', 0.0)}\n")
+            debug_file.write(f"Action: {'FILTERED OUT' if should_filter else 'KEPT'}\n")
+            if should_filter:
+                primary_type = album.get('mb_primary_type')
+                secondary_types = album.get('mb_secondary_types', [])
+                reason = []
+                if primary_type == 'single' and filter_config.get('filter_singles'):
+                    reason.append('single')
+                if primary_type == 'ep' and filter_config.get('filter_eps'):
+                    reason.append('EP')
+                if 'compilation' in secondary_types and filter_config.get('filter_compilations'):
+                    reason.append('compilation')
+                if 'live' in secondary_types and filter_config.get('filter_live'):
+                    reason.append('live')
+                if 'demo' in secondary_types and filter_config.get('filter_demos'):
+                    reason.append('demo')
+                if 'mixtape/street' in secondary_types and filter_config.get('filter_mixtapes'):
+                    reason.append('mixtape')
+                debug_file.write(f"Reason: {', '.join(reason) if reason else 'unknown'}\n")
+            debug_file.write("\n")
+        
+        if should_filter:
+            filtered_count += 1
+        else:
+            filtered.append(album)
+    
+    if debug_file:
+        debug_file.close()
+        print(f"MusicBrainz filtering debug written to data/debug_filtering.txt")
+    
+    if filtered_count > 0:
+        print(f"Filtered out {filtered_count} albums by release type")
+    
+    return filtered
+
 
 def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict], 
-                      artist_threshold: int = 85, title_threshold: int = 85) -> Tuple[List[Dict], List[Dict]]:
+                      artist_threshold: int = 85, title_threshold: int = 85, debug: bool = False) -> Tuple[List[Dict], List[Dict]]:
     """
     Find Last.fm albums that aren't rated on RYM.
     
@@ -131,11 +235,39 @@ def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict],
     
     print(f"Matching {len(lastfm_albums)} Last.fm albums against {len(rym_albums)} RYM albums...")
     
+    # Open debug file if debug mode is enabled
+    debug_file = None
+    if debug:
+        os.makedirs('data', exist_ok=True)
+        debug_file = open('data/debug_output.txt', 'w', encoding='utf-8')
+        debug_file.write("ALBUM MATCHER DEBUG OUTPUT\n")
+        debug_file.write("=" * 60 + "\n\n")
+    
     for lastfm_album in lastfm_albums:
         lastfm_artist = normalize_string(lastfm_album['artist'])
         lastfm_title = normalize_title(lastfm_album['title'])
         
+        if debug and debug_file:
+            debug_file.write(f"ALBUM: {lastfm_album['artist']} - {lastfm_album['title']}\n")
+            debug_file.write(f"Scrobbles: {lastfm_album.get('scrobbles', 'N/A')}\n")
+            
+            # MusicBrainz information
+            if lastfm_album.get('mbid'):
+                debug_file.write(f"MBID: {lastfm_album['mbid']}\n")
+            else:
+                debug_file.write("MBID: None\n")
+                
+            if 'mb_primary_type' in lastfm_album:
+                debug_file.write(f"MusicBrainz ID: {lastfm_album.get('mb_id', 'N/A')}\n")
+                debug_file.write(f"Primary Type: {lastfm_album.get('mb_primary_type', 'N/A')}\n")
+                debug_file.write(f"Secondary Types: {lastfm_album.get('mb_secondary_types', [])}\n")
+                debug_file.write(f"MB Confidence: {lastfm_album.get('mb_confidence', 0.0)}\n")
+            else:
+                debug_file.write("MusicBrainz: Not enriched\n")
+        
         if not lastfm_artist or not lastfm_title:
+            if debug and debug_file:
+                debug_file.write("SKIPPED: Missing artist or title\n\n")
             continue
             
         best_match = None
@@ -189,6 +321,13 @@ def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict],
                     best_match = rym_album
         
         if best_match:
+            if debug and debug_file:
+                debug_file.write(f"MATCHED with RYM: {best_match['artist']} - {best_match['title']}\n")
+                debug_file.write(f"RYM Rating: {best_match['rating']}/10\n")
+                if best_match_info:
+                    debug_file.write(f"Match Scores - Artist: {best_match_info['artist_score']:.1f}, Title: {best_match_info['title_score']:.1f}, Combined: {best_match_info['combined_score']:.1f}\n")
+                debug_file.write("STATUS: Will not appear in recommendations (already rated)\n\n")
+            
             matched_info = {
                 **lastfm_album,
                 'rym_rating': best_match['rating'],
@@ -199,12 +338,24 @@ def fuzzy_match_albums(rym_albums: List[Dict], lastfm_albums: List[Dict],
             }
             matched_albums.append(matched_info)
         else:
+            if debug and debug_file:
+                debug_file.write("NO RYM MATCH found\n")
+                if best_match_info:
+                    debug_file.write(f"Best attempt: {best_match_info['rym_artist']} - {best_match_info['rym_title']}\n")
+                    debug_file.write(f"Best scores - Artist: {best_match_info['artist_score']:.1f}, Title: {best_match_info['title_score']:.1f}, Combined: {best_match_info['combined_score']:.1f}\n")
+                debug_file.write("STATUS: Will appear in recommendations\n\n")
+            
             # Add debugging info about best match attempt
             unrated_info = {
                 **lastfm_album,
                 'best_match': best_match_info
             }
             unrated_albums.append(unrated_info)
+    
+    # Close debug file if open
+    if debug_file:
+        debug_file.close()
+        print(f"Debug information written to data/debug_output.txt")
     
     return matched_albums, unrated_albums
 
@@ -219,12 +370,40 @@ def main():
     parser.add_argument('limit', nargs='?', type=int, default=1000,
                        help='Maximum number of albums to fetch')
     
+    # MusicBrainz filtering options
+    parser.add_argument('--use-musicbrainz', action='store_true',
+                       help='Enable MusicBrainz filtering (auto-filters singles/demos/mixtapes/compilations)')
+    parser.add_argument('--filter-eps', action='store_true',
+                       help='Also filter out EPs (requires --use-musicbrainz)')
+    parser.add_argument('--filter-live', action='store_true',
+                       help='Also filter out live albums (requires --use-musicbrainz)')
+    parser.add_argument('--debug', action='store_true',
+                       help='Write extended debug information to data/debug_output.txt')
+    
     args = parser.parse_args()
     
     rym_csv_path = args.rym_csv
     lastfm_username = args.lastfm_username
     period = args.period
     limit = args.limit
+    
+    # Check MusicBrainz availability and user preferences
+    use_musicbrainz = args.use_musicbrainz
+    if use_musicbrainz and not MUSICBRAINZ_AVAILABLE:
+        print("Error: MusicBrainz client not available")
+        sys.exit(1)
+    
+    # Build filter configuration
+    filter_config = None
+    if use_musicbrainz:
+        filter_config = {
+            'filter_singles': True,  # Always filter singles
+            'filter_eps': args.filter_eps,
+            'filter_compilations': True,  # Always filter compilations
+            'filter_live': args.filter_live,
+            'filter_demos': True,  # Always filter demos
+            'filter_mixtapes': True  # Always filter mixtapes
+        }
     
     # Check if API key is set
     api_key = os.getenv('LASTFM_API_KEY')
@@ -247,7 +426,8 @@ def main():
     
     # Extract Last.fm data
     print(f"\n3. Loading Last.fm data for {lastfm_username} ({period}, limit: {limit})...")
-    lastfm_albums = extract_lastfm_albums(lastfm_username, api_key, period, limit)
+    lastfm_albums = extract_lastfm_albums(lastfm_username, api_key, period, limit, 
+                                          enrich_with_musicbrainz=use_musicbrainz)
     print(f"Found {len(lastfm_albums)} albums on Last.fm")
     
     # Filter out blacklisted albums
@@ -258,13 +438,17 @@ def main():
         if filtered_count > 0:
             print(f"Filtered out {filtered_count} blacklisted albums")
     
+    # Filter by release type if MusicBrainz data is available
+    if use_musicbrainz and filter_config:
+        lastfm_albums = filter_albums_by_type(lastfm_albums, filter_config, debug=args.debug)
+    
     if not rym_albums or not lastfm_albums:
         print("Error: No data to compare")
         sys.exit(1)
     
     # Perform fuzzy matching
     print(f"\n4. Performing fuzzy matching...")
-    matched_albums, unrated_albums = fuzzy_match_albums(rym_albums, lastfm_albums)
+    matched_albums, unrated_albums = fuzzy_match_albums(rym_albums, lastfm_albums, debug=args.debug)
     
     # Display results
     print(f"\n" + "=" * 60)
@@ -288,12 +472,12 @@ def main():
             print(f"{album['scrobbles']} scrobbles")
             print(f"   {album['artist']} - {album['title']}")
             
-            # Show best match attempt for debugging
-            if album.get('best_match'):
+            # Only show match scores in debug mode
+            if args.debug and album.get('best_match'):
                 best = album['best_match']
                 print(f"   Best match: {best['rym_artist']} - {best['rym_title']}")
                 print(f"   Scores: Artist {best['artist_score']:.1f} | Title {best['title_score']:.1f} | Combined {best['combined_score']:.1f}")
-            else:
+            elif args.debug and not album.get('best_match'):
                 print(f"   No potential matches found")
             print()
     

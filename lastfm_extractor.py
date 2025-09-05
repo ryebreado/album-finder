@@ -6,9 +6,16 @@ import os
 from datetime import datetime
 from typing import List, Dict, Optional
 
-def get_cache_filename(username: str, period: str, limit: int) -> str:
+try:
+    from musicbrainz_client import MusicBrainzClient
+    MUSICBRAINZ_AVAILABLE = True
+except ImportError:
+    MUSICBRAINZ_AVAILABLE = False
+
+def get_cache_filename(username: str, period: str, limit: int, with_musicbrainz: bool = False) -> str:
     """Generate cache filename based on parameters."""
-    return f"data/lastfm_{username}_{period}_{limit}.json"
+    mb_suffix = "_mb" if with_musicbrainz else ""
+    return f"data/lastfm_{username}_{period}_{limit}{mb_suffix}.json"
 
 def load_cached_data(cache_file: str) -> Optional[List[Dict[str, str]]]:
     """Load cached data if it exists."""
@@ -42,8 +49,57 @@ def save_to_cache(albums: List[Dict[str, str]], cache_file: str):
     
     print(f"Saved {len(albums)} albums to cache: {cache_file}")
 
+def enrich_albums_with_musicbrainz(albums: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Enrich album data with MusicBrainz release type information."""
+    if not MUSICBRAINZ_AVAILABLE:
+        print("Warning: MusicBrainz client not available, skipping enrichment")
+        return albums
+        
+    print(f"Enriching {len(albums)} albums with MusicBrainz data...")
+    
+    mb_client = MusicBrainzClient()
+    enriched_albums = []
+    
+    for i, album in enumerate(albums):
+        if i % 10 == 0:
+            print(f"Processing album {i+1}/{len(albums)}...")
+        
+        # Create enriched album dict
+        enriched_album = album.copy()
+        
+        # Try to get MusicBrainz release type
+        mbid = album.get('mbid', '').strip()
+        artist = album.get('artist', '')
+        title = album.get('title', '')
+        
+        mb_data = mb_client.get_release_type(
+            mbid=mbid if mbid else None,
+            artist=artist,
+            album=title
+        )
+        
+        if mb_data:
+            enriched_album.update({
+                'mb_primary_type': mb_data.get('primary_type'),
+                'mb_secondary_types': mb_data.get('secondary_types', []),
+                'mb_confidence': mb_data.get('confidence', 0.0),
+                'mb_id': mb_data.get('mbid')
+            })
+        else:
+            enriched_album.update({
+                'mb_primary_type': None,
+                'mb_secondary_types': [],
+                'mb_confidence': 0.0,
+                'mb_id': None
+            })
+        
+        enriched_albums.append(enriched_album)
+    
+    print(f"MusicBrainz enrichment complete!")
+    return enriched_albums
 
-def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', limit: int = 1000) -> List[Dict[str, str]]:
+def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', limit: int = 1000, 
+                          enrich_with_musicbrainz: bool = False) -> List[Dict[str, str]]:
     """
     Extract album data from Last.fm user's top albums.
     
@@ -57,7 +113,7 @@ def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', 
         List of albums with artist, title, and scrobbles.
     """
     # Check cache first
-    cache_file = get_cache_filename(username, period, limit)
+    cache_file = get_cache_filename(username, period, limit, with_musicbrainz=enrich_with_musicbrainz)
     cached_albums = load_cached_data(cache_file)
     if cached_albums is not None:
         return cached_albums
@@ -120,7 +176,8 @@ def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', 
                 album = {
                     'artist': str(artist_name).strip(),
                     'title': str(album_data.get('name', '')).strip(),
-                    'scrobbles': str(album_data.get('playcount', '0'))
+                    'scrobbles': str(album_data.get('playcount', '0')),
+                    'mbid': str(album_data.get('mbid', '')).strip()
                 }
                 
                 # Debug: print first album data on first page
@@ -140,8 +197,12 @@ def extract_lastfm_albums(username: str, api_key: str, period: str = 'overall', 
             
             page += 1
             
-        # Save to cache before returning
+        # Enrich with MusicBrainz data if requested
         final_albums = albums[:limit]
+        if enrich_with_musicbrainz and final_albums:
+            final_albums = enrich_albums_with_musicbrainz(final_albums)
+        
+        # Save to cache before returning
         save_to_cache(final_albums, cache_file)
         return final_albums
         
